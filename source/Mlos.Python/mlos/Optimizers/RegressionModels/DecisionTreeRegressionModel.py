@@ -11,7 +11,7 @@ from mlos.Optimizers.RegressionModels.Prediction import Prediction
 from mlos.Optimizers.RegressionModels.RegressionModel import RegressionModel, RegressionModelConfig
 from mlos.Spaces import Hypergrid, SimpleHypergrid, ContinuousDimension, DiscreteDimension, CategoricalDimension, Point
 from mlos.Spaces.HypergridAdapters import CategoricalToDiscreteHypergridAdapter
-from mlos.Tracer import trace
+from mlos.Tracer import trace, traced
 
 
 class DecisionTreeRegressionModelConfig(RegressionModelConfig):
@@ -172,9 +172,12 @@ class DecisionTreeRegressionModel(RegressionModel):
         self._sample_variance_per_leaf = dict()
         self._count_per_leaf = dict()
 
+        self._num_observations_used_to_fit = 0
+
     @property
     def num_observations_used_to_fit(self):
-        return self.fit_state.train_set_size
+        return self._num_observations_used_to_fit
+        # return self.fit_state.train_set_size
 
     def should_fit(self, num_samples):
         """ Returns true if the model should be fitted.
@@ -235,6 +238,7 @@ class DecisionTreeRegressionModel(RegressionModel):
             self._count_per_leaf[node_index] = len(observations_at_leaf)
 
         self.fitted = True
+        self._num_observations_used_to_fit = len(feature_values_pandas_frame.index)
         self.last_refit_iteration_number = iteration_number
 
     @trace()
@@ -255,11 +259,12 @@ class DecisionTreeRegressionModel(RegressionModel):
             features_df = self._input_space_adapter.project_dataframe(feature_values_pandas_frame, in_place=False)
             features_df = features_df[self.input_dimension_names]
             rows_with_no_nulls_index = features_df.index[features_df.notnull().all(axis=1)]
-            if not rows_with_no_nulls_index.empty:
-                valid_rows_index = features_df.loc[rows_with_no_nulls_index].index[features_df.loc[rows_with_no_nulls_index].apply(
-                    lambda row: Point(**{dim_name: row[i] for i, dim_name in enumerate(self.input_dimension_names)}) in self._input_space_adapter,
-                    axis=1
-                )]
+            with traced("selecting_valid_rows"):
+                if not rows_with_no_nulls_index.empty:
+                    valid_rows_index = features_df.loc[rows_with_no_nulls_index].index[features_df.loc[rows_with_no_nulls_index].apply(
+                        lambda row: Point(**{dim_name: row[i] for i, dim_name in enumerate(self.input_dimension_names)}) in self._input_space_adapter,
+                        axis=1
+                    )]
 
         predictions = Prediction(
             objective_name=self.target_dimension_names[0],
@@ -269,14 +274,17 @@ class DecisionTreeRegressionModel(RegressionModel):
         prediction_dataframe = predictions.get_dataframe()
 
         if valid_rows_index is not None and not valid_rows_index.empty:
-            prediction_dataframe['leaf_node_index'] = self._regressor.apply(features_df.loc[valid_rows_index].to_numpy())
-            prediction_dataframe[predicted_value_col] = prediction_dataframe['leaf_node_index'].map(self._mean_per_leaf)
-            prediction_dataframe[predicted_value_var_col] = prediction_dataframe['leaf_node_index'].map(self._mean_variance_per_leaf)
-            prediction_dataframe[sample_var_col] = prediction_dataframe['leaf_node_index'].map(self._sample_variance_per_leaf)
-            prediction_dataframe[sample_size_col] = prediction_dataframe['leaf_node_index'].map(self._count_per_leaf)
-            prediction_dataframe[dof_col] = prediction_dataframe[sample_size_col] - 1
-            prediction_dataframe[is_valid_input_col] = True
-            prediction_dataframe.drop(columns=['leaf_node_index'], inplace=True)
+            with traced("self._regressor.apply"):
+                prediction_dataframe['leaf_node_index'] = self._regressor.apply(features_df.loc[valid_rows_index].to_numpy())
+
+            with traced("variance_computation"):
+                prediction_dataframe[predicted_value_col] = prediction_dataframe['leaf_node_index'].map(self._mean_per_leaf)
+                prediction_dataframe[predicted_value_var_col] = prediction_dataframe['leaf_node_index'].map(self._mean_variance_per_leaf)
+                prediction_dataframe[sample_var_col] = prediction_dataframe['leaf_node_index'].map(self._sample_variance_per_leaf)
+                prediction_dataframe[sample_size_col] = prediction_dataframe['leaf_node_index'].map(self._count_per_leaf)
+                prediction_dataframe[dof_col] = prediction_dataframe[sample_size_col] - 1
+                prediction_dataframe[is_valid_input_col] = True
+                prediction_dataframe.drop(columns=['leaf_node_index'], inplace=True)
 
         predictions.validate_dataframe(prediction_dataframe)
         if not include_only_valid_rows:

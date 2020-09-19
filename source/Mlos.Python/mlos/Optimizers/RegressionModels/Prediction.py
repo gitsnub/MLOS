@@ -6,6 +6,8 @@ from enum import Enum
 from typing import List
 import pandas as pd
 
+from mlos.Tracer import trace
+
 class Prediction:
     """ General Prediction class used to capture output from surrogate model .predict() methods
 
@@ -91,6 +93,7 @@ class Prediction:
         else:
             self._dataframe.loc[dataframe.index, self.expected_column_names] = dataframe[self.expected_column_names]
 
+    @trace()
     def validate_dataframe(self, dataframe: pd.DataFrame):
 
         if not self.allow_extra_columns:

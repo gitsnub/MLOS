@@ -6,6 +6,7 @@ from abc import abstractmethod
 import numpy as np
 from pandas import DataFrame
 from mlos.Spaces import Hypergrid, Point, SimpleHypergrid
+from mlos.Tracer import trace
 
 
 class HypergridAdapter(Hypergrid):
@@ -80,6 +81,7 @@ class HypergridAdapter(Hypergrid):
             point = self.adaptee.unproject_point(point)
         return point
 
+    @trace()
     def project_dataframe(self, df: DataFrame, in_place: bool = True) -> DataFrame:
         if isinstance(self.adaptee, HypergridAdapter):
             df = self.adaptee.project_dataframe(df, in_place)
@@ -95,6 +97,7 @@ class HypergridAdapter(Hypergrid):
                 df[dimension.name] = np.nan
         return self._project_dataframe(df, in_place)
 
+    @trace()
     def unproject_dataframe(self, df: DataFrame, in_place: bool = True) -> DataFrame:
         df = self._unproject_dataframe(df, in_place)
         if isinstance(self.adaptee, HypergridAdapter):
